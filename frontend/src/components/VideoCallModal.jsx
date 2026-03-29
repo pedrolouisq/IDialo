@@ -11,9 +11,16 @@ export default function VideoCallModal({ socket, user, activeCall, onEndCall }) 
   const [remoteStream, setRemoteStream] = useState(null);
   const [isSharingScreen, setIsSharingScreen] = useState(false);
 
+  const iceCandidatesQueue = useRef([]);
+
   const servers = {
     iceServers: [
-      { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
     ]
   };
 
@@ -28,16 +35,31 @@ export default function VideoCallModal({ socket, user, activeCall, onEndCall }) 
     // Escuchar eventos P2P
     const handleAnswer = async ({ from, answer }) => {
       if (from !== activeCall.targetId || !peerConnectionRef.current) return;
-      await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-      setCallState('connected');
+      try {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+        setCallState('connected');
+        
+        // Procesar candidatos en cola
+        if (iceCandidatesQueue.current.length > 0) {
+          processQueuedCandidates(peerConnectionRef.current);
+        }
+      } catch (err) {
+        console.error("Error processing answer", err);
+      }
     };
 
     const handleIceCandidate = async ({ from, candidate }) => {
-      if (from !== activeCall.targetId || !peerConnectionRef.current) return;
-      try {
-        await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.error('Error adding received ice candidate', e);
+      if (from !== activeCall.targetId) return;
+      
+      const pc = peerConnectionRef.current;
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding received ice candidate', e);
+        }
+      } else {
+        iceCandidatesQueue.current.push(candidate);
       }
     };
 
@@ -55,15 +77,26 @@ export default function VideoCallModal({ socket, user, activeCall, onEndCall }) 
       socket.off('ice_candidate', handleIceCandidate);
       socket.off('call_end', handleCallEnd);
       
-      // Cleanup de cámara si el componente se desmonta inesperadamente
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop());
       }
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
       }
+      iceCandidatesQueue.current = [];
     };
   }, [socket, activeCall]);
+
+  const processQueuedCandidates = async (pc) => {
+    while (iceCandidatesQueue.current.length > 0) {
+      const candidate = iceCandidatesQueue.current.shift();
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error("Error adding queued ice candidate", e);
+      }
+    }
+  };
 
   const hasStarted = useRef(false);
   // Si soy el que llama (no incoming)
@@ -131,6 +164,12 @@ export default function VideoCallModal({ socket, user, activeCall, onEndCall }) 
     
     setCallState('connected');
     await pc.setRemoteDescription(new RTCSessionDescription(activeCall.offer));
+    
+    // Procesar cualquier candidato que llegó mientras esperábamos que el usuario aceptara
+    if (iceCandidatesQueue.current.length > 0) {
+      processQueuedCandidates(pc);
+    }
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 

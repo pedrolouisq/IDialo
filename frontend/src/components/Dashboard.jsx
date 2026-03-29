@@ -254,12 +254,50 @@ export default function Dashboard({ user, token, onLogout, onUserUpdate }) {
     }, 1500);
   };
 
-  const handleImageUpload = (e) => {
+  const compressImage = (base64Str, maxWidth = 1000, maxHeight = 1000) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = base64Str;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height *= maxWidth / width;
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width *= maxHeight / height;
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.6)); // 60% calidad es suficiente y muy ligera
+      };
+    });
+  };
+
+  const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    
+    // Mostrar un indicador básico o simplemente proceder rápido
     const reader = new FileReader();
-    reader.onload = (ev) => { setImagePreview(ev.target.result) };
+    reader.onload = async (ev) => { 
+      const compressed = await compressImage(ev.target.result);
+      setImagePreview(compressed);
+    };
     reader.readAsDataURL(file);
+    
+    // Limpiar input para permitir seleccionar la misma foto si se desea
+    e.target.value = null;
   };
 
   const sendMessage = (e) => {
@@ -550,7 +588,14 @@ export default function Dashboard({ user, token, onLogout, onUserUpdate }) {
               )}
               
               <form className="chat-input-form" onSubmit={sendMessage}>
-                <input type="file" accept="image/*" style={{display:'none'}} ref={fileInputRef} onChange={handleImageUpload}/>
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  style={{display:'none'}} 
+                  ref={fileInputRef} 
+                  onChange={handleImageUpload}
+                  onClick={(e) => { e.target.value = null }} 
+                />
                 <button type="button" className="btn-attach" onClick={() => fileInputRef.current?.click()} title="Adjuntar Imagen">
                   <ImageIcon size={20}/>
                 </button>
